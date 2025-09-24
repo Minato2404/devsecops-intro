@@ -1,8 +1,8 @@
-name: CI Pipeline billy
+name: CI Pipeline
 
 on:
   push:
-    branches: [ "main" ]   # jalan setiap ada push ke main
+    branches: [ "main" ]
 
 jobs:
   build:
@@ -16,5 +16,9 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Run Program
-        run: python hello.py
+      - name: Install Dependencies
+        run: pip install pytest
+
+      - name: Run Tests
+        run: pytest
+
