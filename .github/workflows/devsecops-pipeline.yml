@@ -1,0 +1,59 @@
+name: DevSecOps Security Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Run Semgrep Security Scan
+        id: semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: auto
+        continue-on-error: true
+      
+      - name: Determine Severity Level
+        id: severity
+        run: |
+          # Logic sederhana untuk menentukan severity berdasarkan hasil Semgrep
+          # Anda bisa sesuaikan dengan kebutuhan
+          if [ "${{ steps.semgrep.outcome }}" == "failure" ]; then
+            echo "severity=HIGH" >> $GITHUB_OUTPUT
+            echo "finding=Critical security vulnerabilities detected by Semgrep" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.semgrep.outcome }}" == "success" ]; then
+            echo "severity=LOW" >> $GITHUB_OUTPUT
+            echo "finding=No critical issues found, minor warnings detected" >> $GITHUB_OUTPUT
+          else
+            echo "severity=MEDIUM" >> $GITHUB_OUTPUT
+            echo "finding=Potential security issues detected, review recommended" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Send Results to n8n DevSecOps Orchestrator
+        run: |
+          curl -X POST https://latihann8n04.app.n8n.cloud/webhook/devsecops-pipeline \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${{ secrets.N8N_WEBHOOK_TOKEN }}" \
+            -d "{
+              \"repository\": \"${{ github.repository }}\",
+              \"branch\": \"${{ github.ref_name }}\",
+              \"commit\": \"${{ github.sha }}\",
+              \"scanner\": \"semgrep\",
+              \"pipeline_status\": \"${{ job.status }}\",
+              \"finding_summary\": \"${{ steps.severity.outputs.finding }}\",
+              \"severity\": \"${{ steps.severity.outputs.severity }}\"
+            }"
+      
+      - name: Check DevSecOps Decision
+        run: |
+          echo "Security scan completed and sent to n8n DevSecOps orchestrator"
+          echo "Severity: ${{ steps.severity.outputs.severity }}"
+          echo "Check Slack #devsecops-alerts for review notifications"
