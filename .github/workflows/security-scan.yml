@@ -1,0 +1,74 @@
+name: DevSecOps Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install Semgrep
+      run: pip install semgrep
+      
+    - name: Run Semgrep Scan
+      id: semgrep
+      run: |
+        semgrep --config=auto . --json > semgrep-results.json || true
+        
+    - name: Parse and Send to n8n
+      env:
+        N8N_WEBHOOK_URL: ${{ secrets.N8N_WEBHOOK_URL }}
+      run: |
+        # Parse semgrep results and send to n8n
+        python << 'EOF'
+        import json
+        import requests
+        import os
+        
+        # Read semgrep results
+        with open('semgrep-results.json', 'r') as f:
+            semgrep_data = json.load(f)
+        
+        # Transform to n8n format
+        findings = []
+        for result in semgrep_data.get('results', []):
+            severity = result.get('extra', {}).get('severity', 'MEDIUM').upper()
+            findings.append({
+                'severity': severity,
+                'title': result.get('check_id', 'Unknown'),
+                'description': result.get('extra', {}).get('message', ''),
+                'file': result.get('path', ''),
+                'line': result.get('start', {}).get('line', 0),
+                'cwe': result.get('extra', {}).get('metadata', {}).get('cwe', '')
+            })
+        
+        # Prepare payload for n8n
+        payload = {
+            'repository': os.environ.get('GITHUB_REPOSITORY', ''),
+            'branch': os.environ.get('GITHUB_REF_NAME', ''),
+            'commit': os.environ.get('GITHUB_SHA', ''),
+            'scanner': 'semgrep',
+            'status': 'failed' if findings else 'success',
+            'findings': findings
+        }
+        
+        # Send to n8n webhook
+        webhook_url = os.environ.get('N8N_WEBHOOK_URL')
+        if webhook_url:
+            response = requests.post(webhook_url, json=payload)
+            print(f"Sent to n8n: {response.status_code}")
+        else:
+            print("N8N_WEBHOOK_URL not configured")
+        EOF
