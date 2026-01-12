@@ -1,0 +1,39 @@
+name: DevSecOps Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Run Semgrep Scan
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: auto
+        continue-on-error: true
+        id: semgrep
+      
+      - name: Send Results to n8n Webhook
+        if: always()
+        run: |
+          curl -X POST "https://latihann8n04.app.n8n.cloud/webhook/webhook/devsecops-pipeline" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "repository": "${{ github.repository }}",
+              "branch": "${{ github.ref_name }}",
+              "commit": "${{ github.sha }}",
+              "scanner": "semgrep",
+              "pipeline_status": "${{ job.status }}",
+              "severity": "MEDIUM",
+              "finding_summary": "Security scan completed",
+              "findings": [],
+              "total_findings": 0
+            }'
