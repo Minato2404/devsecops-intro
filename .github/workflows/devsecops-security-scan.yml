@@ -1,0 +1,210 @@
+name: DevSecOps Security Scan
+
+on:
+  push:
+    branches: [ main, develop, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Bisa trigger manual dari GitHub UI
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Full history untuk analisis lebih baik
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Install Dependencies
+      run: |
+        pip install semgrep requests
+        
+    - name: Run Semgrep Security Scan
+      id: semgrep
+      continue-on-error: true
+      run: |
+        echo "🔍 Running Semgrep security scan..."
+        semgrep --config=auto . --json > semgrep-results.json || true
+        echo "✅ Semgrep scan completed"
+        
+    - name: Parse Results and Send to n8n
+      if: always()
+      env:
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_REF_NAME: ${{ github.ref_name }}
+        GITHUB_SHA: ${{ github.sha }}
+        GITHUB_WORKFLOW: ${{ github.workflow }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        GITHUB_ACTOR: ${{ github.actor }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+      run: |
+        python << 'PYTHON_SCRIPT'
+        import json
+        import requests
+        import os
+        from datetime import datetime
+
+        print("=" * 60)
+        print("🚀 DevSecOps Security Scan - n8n Integration")
+        print("=" * 60)
+
+        # Read Semgrep results
+        try:
+            with open('semgrep-results.json', 'r') as f:
+                semgrep_data = json.load(f)
+            print(f"✅ Loaded Semgrep results")
+        except Exception as e:
+            print(f"⚠️  No Semgrep results found: {e}")
+            semgrep_data = {'results': []}
+
+        # Parse findings
+        findings = []
+        severity_count = {'HIGH': 0, 'MEDIUM': 0, 'LOW': 0, 'INFO': 0}
+
+        for result in semgrep_data.get('results', []):
+            severity = result.get('extra', {}).get('severity', 'MEDIUM').upper()
+            
+            # Map severity
+            if severity not in severity_count:
+                severity = 'MEDIUM'
+            
+            severity_count[severity] += 1
+            
+            finding = {
+                'severity': severity,
+                'rule_id': result.get('check_id', 'Unknown'),
+                'title': result.get('extra', {}).get('message', 'Security issue detected'),
+                'description': result.get('extra', {}).get('message', ''),
+                'file': result.get('path', ''),
+                'line_start': result.get('start', {}).get('line', 0),
+                'line_end': result.get('end', {}).get('line', 0),
+                'code_snippet': result.get('extra', {}).get('lines', ''),
+                'cwe': result.get('extra', {}).get('metadata', {}).get('cwe', []),
+                'owasp': result.get('extra', {}).get('metadata', {}).get('owasp', []),
+                'references': result.get('extra', {}).get('metadata', {}).get('references', [])
+            }
+            findings.append(finding)
+
+        # Determine overall severity and status
+        total_findings = len(findings)
+        
+        if severity_count['HIGH'] > 0:
+            overall_severity = 'HIGH'
+            pipeline_status = 'failed'
+            finding_summary = f"🚨 CRITICAL: {severity_count['HIGH']} high-severity vulnerabilities detected"
+        elif severity_count['MEDIUM'] > 0:
+            overall_severity = 'MEDIUM'
+            pipeline_status = 'success'  # Pipeline sukses tapi ada findings
+            finding_summary = f"⚠️  WARNING: {severity_count['MEDIUM']} medium-severity issues found"
+        elif severity_count['LOW'] > 0:
+            overall_severity = 'LOW'
+            pipeline_status = 'success'
+            finding_summary = f"ℹ️  INFO: {severity_count['LOW']} low-severity issues found"
+        else:
+            overall_severity = 'LOW'
+            pipeline_status = 'success'
+            finding_summary = "✅ No security issues detected"
+
+        # Get commit message
+        commit_message = os.popen('git log -1 --pretty=%B').read().strip()
+
+        # Prepare comprehensive payload for n8n
+        payload = {
+            # Repository info
+            'repository': os.environ.get('GITHUB_REPOSITORY', ''),
+            'branch': os.environ.get('GITHUB_REF_NAME', ''),
+            'commit': os.environ.get('GITHUB_SHA', ''),
+            'commit_message': commit_message,
+            
+            # Scan info
+            'scanner': 'semgrep',
+            'scan_timestamp': datetime.utcnow().isoformat() + 'Z',
+            
+            # Status
+            'pipeline_status': pipeline_status,
+            'severity': overall_severity,
+            'finding_summary': finding_summary,
+            
+            # Findings detail
+            'findings': findings,
+            'total_findings': total_findings,
+            'severity_breakdown': severity_count,
+            
+            # GitHub metadata
+            'workflow_name': os.environ.get('GITHUB_WORKFLOW', ''),
+            'run_id': os.environ.get('GITHUB_RUN_ID', ''),
+            'run_url': f"{os.environ.get('GITHUB_SERVER_URL', '')}/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
+            'actor': os.environ.get('GITHUB_ACTOR', ''),
+            'event': os.environ.get('GITHUB_EVENT_NAME', '')
+        }
+
+        # Print summary
+        print(f"\n📊 Scan Summary:")
+        print(f"   Total Findings: {total_findings}")
+        print(f"   HIGH: {severity_count['HIGH']}")
+        print(f"   MEDIUM: {severity_count['MEDIUM']}")
+        print(f"   LOW: {severity_count['LOW']}")
+        print(f"   Overall Severity: {overall_severity}")
+        print(f"   Pipeline Status: {pipeline_status}")
+
+        # Send to n8n webhook
+        webhook_url = 'https://latihann8n04.app.n8n.cloud/webhook/webhook/devsecops-pipeline'
+        
+        print(f"\n🔗 Sending to n8n webhook...")
+        print(f"   URL: {webhook_url}")
+        
+        try:
+            response = requests.post(
+                webhook_url, 
+                json=payload, 
+                timeout=30,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            print(f"\n✅ Successfully sent to n8n!")
+            print(f"   Status Code: {response.status_code}")
+            print(f"   Response: {response.text[:200]}")
+            
+            if response.status_code == 200:
+                print("\n🎉 n8n workflow triggered successfully!")
+                print("   Check your Slack/Telegram for notifications")
+            else:
+                print(f"\n⚠️  Unexpected response code: {response.status_code}")
+                
+        except requests.exceptions.Timeout:
+            print(f"\n❌ Timeout: n8n webhook took too long to respond")
+        except requests.exceptions.ConnectionError:
+            print(f"\n❌ Connection Error: Could not reach n8n webhook")
+        except Exception as e:
+            print(f"\n❌ Error sending to n8n: {str(e)}")
+            
+        print("=" * 60)
+        PYTHON_SCRIPT
+        
+    - name: Upload Semgrep Results
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: semgrep-results
+        path: semgrep-results.json
+        retention-days: 30
+        
+    - name: Summary
+      if: always()
+      run: |
+        echo "## 🔒 DevSecOps Security Scan Complete" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Scan results have been sent to n8n DevSecOps orchestrator" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "📬 Check your notifications:" >> $GITHUB_STEP_SUMMARY
+        echo "- Slack: #devsecops-alerts" >> $GITHUB_STEP_SUMMARY
+        echo "- Telegram: DevSecOps Bot" >> $GITHUB_STEP_SUMMARY
+        echo "- Email: Security team will receive PDF report" >> $GITHUB_STEP_SUMMARY
