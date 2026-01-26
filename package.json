@@ -1,0 +1,16 @@
+{
+  "name": "proyek-devsecops-skripsi",
+  "version": "1.0.0",
+  "description": "Aplikasi simulasi untuk pengujian DevSecOps n8n dan Snyk",
+  "main": "app.js",
+  "dependencies": {
+    "express": "4.16.0",
+    "lodash": "4.17.15",
+    "axios": "0.21.0",
+    "mysql2": "2.1.0",
+    "jsonwebtoken": "8.5.1"
+  },
+  "scripts": {
+    "start": "node app.js"
+  }
+}
