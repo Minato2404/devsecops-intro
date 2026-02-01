@@ -6,7 +6,7 @@
   "dependencies": {
     "express": "4.16.0",
     "lodash": "4.17.15",
-    "axios": "0.21.0",
+    "axios": "0.30.2",
     "mysql2": "2.1.0",
     "jsonwebtoken": "8.5.1"
   },
